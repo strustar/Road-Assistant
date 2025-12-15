@@ -13,6 +13,13 @@ try:
 except ImportError:
     OPENAI_AVAILABLE = False
 
+# 🔥 추가
+try:
+    from anthropic import Anthropic
+    ANTHROPIC_AVAILABLE = True
+except ImportError:
+    ANTHROPIC_AVAILABLE = False
+
 try:
     from pinecone import Pinecone
     PINECONE_AVAILABLE = True
@@ -158,10 +165,7 @@ def get_system_prompt() -> str:
 
 ---
 ### 📖 상세 설명 (심화 이해용)
-- 가독성을 위해 단락별 2줄 띄우기
-- 문장별 한줄 띄우고, 출처 표시
-
-0. '現', '검토배경', '현황', '문제점', '사례조사', '기존' 등은 참조용으로만(절대 결론성으로 이용하지 마세요) 사용하세요. 최종 결과는 개선(안), 변경(안) 등입니다.
+- '現', '검토배경', '현황', '문제점', '사례조사', '기존' 등은 참조용으로만(절대 결론성으로 이용하지 마세요) 사용하세요. 최종 결과는 개선(안), 변경(안) 등입니다.
 
 1. 매우 상세하게 답변하세요.
 - 배경, 목적, 예외사항, 관련 규정까지 포함
@@ -203,7 +207,7 @@ def get_system_prompt() -> str:
 - 사전 검증 절차 의무화
 ([설계행정 | 1-1 드론라이다 통합측량 확대방안 | 설계처-181 | 2024.01.16])
 
-**변경 이유:** (예시시)
+**변경 이유:** (예시)
 드론라이다 기술의 본격 도입으로 객관적이고 명확한 품질 기준이 필요해졌으며, 2023년 시범사업 결과 최소 400pts 이상이 적정하다고 판단되었습니다.
 
 **예외 사항 및 특이사항**
@@ -345,22 +349,20 @@ def extract_search_keywords(query: str) -> str:
 # =========================
 class PineconeRAG:
     def __init__(self):
-        self.client: OpenAI = None
+        self.client: OpenAI = None  # 임베딩용
+        self.anthropic_client: Anthropic = None  # 🔥 추가 (LLM용)
         self.pc: Pinecone = None
         self.index = None
         self.namespace_map = {}
         
     def init_clients(self):
-        """OpenAI와 Pinecone 클라이언트 초기화"""
-        # api_key_openai = os.getenv("OPENAI_API_KEY")
-        # api_key_pinecone = os.getenv("PINECONE_API_KEY")
-
-        # 배포용 (둘 다 지원)
+        """OpenAI, Anthropic, Pinecone 클라이언트 초기화"""
+        
+        # API 키 가져오기 함수
         def get_api_key(key_name: str) -> str:
             """Streamlit Secrets 또는 환경변수에서 API 키 가져오기"""
             # 1. Streamlit Secrets (배포 환경)
             try:
-                import streamlit as st
                 if key_name in st.secrets:
                     return st.secrets[key_name]
             except:
@@ -368,27 +370,53 @@ class PineconeRAG:
             
             # 2. 환경변수 (로컬 환경)
             return os.getenv(key_name, "")
-
-        # 사용
+        
+        # API 키들 가져오기
         api_key_openai = get_api_key("OPENAI_API_KEY")
+        api_key_anthropic = get_api_key("ANTHROPIC_API_KEY")
         api_key_pinecone = get_api_key("PINECONE_API_KEY")
         
+        # 🔥 디버깅: 키 존재 확인
+        print(f"🔑 OpenAI Key: {bool(api_key_openai)}")
+        print(f"🔑 Anthropic Key: {bool(api_key_anthropic)}")
+        print(f"🔑 Pinecone Key: {bool(api_key_pinecone)}")
+        
+        # API 키 검증
         if not api_key_openai:
             st.error("❌ OPENAI_API_KEY가 없습니다!")
+            return False
+        if not api_key_anthropic:
+            st.error("❌ ANTHROPIC_API_KEY가 없습니다!")
             return False
         if not api_key_pinecone:
             st.error("❌ PINECONE_API_KEY가 없습니다!")
             return False
         
+        # 클라이언트 초기화
         try:
+            # OpenAI 초기화
             self.client = OpenAI(api_key=api_key_openai)
+            print("✅ OpenAI 클라이언트 초기화 성공")
+            
+            # 🔥 Anthropic 초기화
+            self.anthropic_client = Anthropic(api_key=api_key_anthropic)
+            print("✅ Anthropic 클라이언트 초기화 성공")
+            
+            # Pinecone 초기화
             self.pc = Pinecone(api_key=api_key_pinecone)
             self.index = self.pc.Index(INDEX_NAME)
+            print("✅ Pinecone 클라이언트 초기화 성공")
+            
             self._build_namespace_map()
+            
             return True
+            
         except Exception as e:
             st.error(f"❌ 클라이언트 초기화 실패: {e}")
-            return False
+            print(f"상세 에러: {e}")
+            import traceback
+            print(traceback.format_exc())
+        return False
     
     def _build_namespace_map(self):
         """실제 존재하는 namespace 조회 및 매핑"""
@@ -560,15 +588,15 @@ class PineconeRAG:
         # 연도 역순(최신순)으로 순회
         sorted_years = sorted(docs_by_year.keys(), reverse=True)
         
-        for year in sorted_years:
-            # 해당 연도 문서들을 점수순 정렬
-            docs_by_year[year].sort(key=lambda x: x["score"], reverse=True)
+        # for year in sorted_years:
+        #     # 해당 연도 문서들을 점수순 정렬
+        #     docs_by_year[year].sort(key=lambda x: x["score"], reverse=True)
             
-            # 상위 2개 추출 (있으면)
-            top_2_docs = docs_by_year[year][:2]
-            for doc in top_2_docs:
-                final_results.append(doc)
-                selected_ids.add(doc["id"])
+        #     # 상위 2개 추출 (있으면)
+        #     top_2_docs = docs_by_year[year][:2]
+        #     for doc in top_2_docs:
+        #         final_results.append(doc)
+        #         selected_ids.add(doc["id"])
         
         # (2) 남은 공간(top_k) 채우기
         # 전체 리스트를 다시 점수순으로 정렬하여, 아직 선택 안 된 고득점 문서 추가
@@ -620,37 +648,56 @@ class PineconeRAG:
         return "\n\n".join(context_parts)
     
     def generate_response_streaming(self, query: str, context: str, 
-                                     model: str, placeholder) -> str:
-        """스트리밍 방식으로 LLM 응답 생성"""
+                                    model: str, placeholder) -> str:
+        """GPT 또는 Claude로 스트리밍 응답 생성"""
         
-        system_prompt = get_system_prompt()        
+        system_prompt = get_system_prompt()
         user_prompt = get_user_prompt(query, context)
 
         try:
-            stream = self.client.chat.completions.create(
-                model=model,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt}
-                ],
-                # 🔥🔥🔥 [핵심 수정: 일관성 강제 설정] 🔥🔥🔥
-                temperature=0.0,  # 창의성 0 (가장 확률 높은 단어만 선택)
-                top_p=0.1,        # 확률 분포 꼬리 자르기 (이상한 단어 선택 방지)
-                seed=12345,       # 랜덤 시드 고정 (항상 같은 결과를 내도록 강제)
-                stream=True
-            )
-            
             response_text = ""
-            for chunk in stream:
-                if chunk.choices and chunk.choices[0].delta and chunk.choices[0].delta.content:
-                    response_text += chunk.choices[0].delta.content
-                    placeholder.markdown(response_text + "▌")
+            
+            # 🔥 모델 타입에 따라 분기
+            if model.startswith("claude"):
+                # ✅ Claude 사용
+                with self.anthropic_client.messages.stream(
+                    model=model,
+                    max_tokens=10000,
+                    temperature=0.0,
+                    system=system_prompt,
+                    messages=[
+                        {"role": "user", "content": user_prompt}
+                    ]
+                ) as stream:
+                    for text in stream.text_stream:
+                        response_text += text
+                        placeholder.markdown(response_text + "▌")
+            
+            else:
+                # ✅ GPT 사용
+                stream = self.client.chat.completions.create(
+                    model=model,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt}
+                    ],
+                    temperature=0.0,
+                    stream=True
+                )
+                
+                for chunk in stream:
+                    if chunk.choices and chunk.choices[0].delta and chunk.choices[0].delta.content:
+                        response_text += chunk.choices[0].delta.content
+                        placeholder.markdown(response_text + "▌")
             
             placeholder.markdown(response_text)
             return response_text
             
         except Exception as e:
+            import traceback
+            error_msg = traceback.format_exc()
             placeholder.error(f"❌ LLM 호출 오류: {str(e)}")
+            print(f"상세 에러:\n{error_msg}")
             return ""
     
     def get_index_stats(self) -> Dict:
@@ -860,9 +907,11 @@ def main():
             # LLM 설정
             st.subheader("🤖 LLM 설정")
             model_options = {
-                "GPT-4o-mini (기본, 저비용)": "gpt-4o-mini",
-                "GPT-4o (고품질)": "gpt-4o",
-                "GPT-4-turbo": "gpt-4-turbo",
+                "Claude 4 Sonnet (추천)": "claude-sonnet-4-20250514",
+                "Claude 3.5 Sonnet": "claude-3-5-sonnet-20241022",
+                "Claude 3 Haiku (저비용)": "claude-3-haiku-20240307",
+                "GPT-4o-mini": "gpt-4o-mini",
+                "GPT-4o": "gpt-4o",
             }
             selected_model_name = st.selectbox("모델", list(model_options.keys()))
             selected_model = model_options[selected_model_name]
