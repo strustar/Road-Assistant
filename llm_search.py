@@ -497,7 +497,8 @@ class PineconeRAG:
         # (2) 부서 추출 (설계처, 구조물처 등 'OO처' 패턴)
         # 이미 필터에 없으면 쿼리에서 찾아서 넣음
         if "dept" not in filters:
-            dept_match = re.search(r'([가-힣]+처)', query)
+            # dept_match = re.search(r'([가-힣]+처)', query)
+            dept_match = re.search(r'([가-힣]+처)(?![가-힣])', query)
             if dept_match:
                 filters["dept"] = dept_match.group(1)
                 print(f"🕵️‍♂️ [Auto-Filter] 부서 감지: {filters['dept']}")
