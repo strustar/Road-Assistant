@@ -26,6 +26,13 @@ try:
 except ImportError:
     PINECONE_AVAILABLE = False
 
+# 🔥 Cohere Reranker
+try:
+    import cohere
+    COHERE_AVAILABLE = True
+except ImportError:
+    COHERE_AVAILABLE = False
+
 load_dotenv()
 
 # =========================
@@ -34,7 +41,7 @@ load_dotenv()
 st.set_page_config(
     page_title="설계실무지침 AI 검색",
     page_icon="🏗️",
-    # layout="wide",
+    # layout="wide",  — CSS로 중앙 폭 조정
     initial_sidebar_state="expanded"
 )
 
@@ -43,38 +50,128 @@ st.set_page_config(
 # =========================
 st.markdown("""
 <style>
-  .main { background-color: #f8f9fa; }
+  /* ===== 중앙 영역 폭 확대 (Claude 스타일) ===== */
+  .block-container {
+    max-width: 900px !important;  /* 기본 730px → 900px */
+    padding-left: 2rem !important;
+    padding-right: 2rem !important;
+  }
+  
+  /* ===== 글자 크기 조정 ===== */
+  .stMarkdown, .stChatMessage {
+    font-size: 0.95rem;
+    line-height: 1.7;
+  }
+  
+  /* ===== 전체 레이아웃 ===== */
   .stButton > button { width: 100%; }
-  .chat-message {
-    padding: 1rem;
+  
+  /* ===== 검색/형제 배지 ===== */
+  .badge-search {
+    display: inline-block;
+    background: #2196f3;
+    color: white;
+    padding: 2px 8px;
     border-radius: 12px;
-    margin-bottom: 1rem;
+    font-size: 0.75rem;
+    font-weight: 600;
   }
-  .user-message {
-    background: #e3f2fd;
-    border-left: 4px solid #2196f3;
+  .badge-sibling {
+    display: inline-block;
+    background: #ff9800;
+    color: white;
+    padding: 2px 8px;
+    border-radius: 12px;
+    font-size: 0.75rem;
+    font-weight: 600;
   }
-  .assistant-message {
-    background: #ffffff;
-    border-left: 4px solid #4caf50;
-    border: 1px solid #e9ecef;
+  .badge-llm {
+    display: inline-block;
+    background: #4caf50;
+    color: white;
+    padding: 2px 8px;
+    border-radius: 12px;
+    font-size: 0.75rem;
+    font-weight: 600;
   }
-  .source-card {
-    background: #f8f9fa;
-    padding: 0.8rem;
-    border-radius: 8px;
-    border: 1px solid #dee2e6;
-    margin: 0.5rem 0;
-    font-size: 0.9rem;
-  }
-  .source-text {
-    white-space: pre-wrap;
-    font-family: 'Malgun Gothic', sans-serif;
-    line-height: 1.6;
-  }
-  .example-btn {
+  
+  /* ===== 검색 결과 상단 요약 바 ===== */
+  .search-summary-bar {
+    background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+    color: white;
+    padding: 12px 16px;
+    border-radius: 10px;
+    margin: 8px 0;
+    display: flex;
+    gap: 16px;
+    flex-wrap: wrap;
+    align-items: center;
     font-size: 0.85rem;
-    padding: 0.3rem 0.5rem;
+  }
+  .search-summary-bar .stat {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .search-summary-bar .stat-num {
+    font-weight: 700;
+    font-size: 1.1rem;
+  }
+  
+  /* ===== 문서 그룹 카드 ===== */
+  .doc-group-card {
+    background: #f8f9fa;
+    border: 1px solid #e0e0e0;
+    border-left: 4px solid #2196f3;
+    border-radius: 8px;
+    padding: 12px 16px;
+    margin: 8px 0;
+  }
+  .doc-group-card.has-sibling {
+    border-left-color: #ff9800;
+  }
+  .doc-group-title {
+    font-weight: 600;
+    font-size: 0.95rem;
+    color: #1a1a2e;
+  }
+  .doc-group-meta {
+    font-size: 0.8rem;
+    color: #666;
+    margin-top: 4px;
+  }
+  .chunk-pills {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-top: 8px;
+  }
+  .chunk-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    padding: 2px 10px;
+    border-radius: 16px;
+    font-size: 0.75rem;
+    font-family: monospace;
+    font-weight: 500;
+  }
+  .chunk-pill.search { background: #e3f2fd; color: #1565c0; border: 1px solid #90caf9; }
+  .chunk-pill.sibling { background: #fff3e0; color: #e65100; border: 1px solid #ffcc80; }
+  .chunk-pill.llm-yes { border-width: 2px; }
+  .chunk-pill.llm-no { opacity: 0.5; }
+
+  /* ===== 사이드바 개선 ===== */
+  section[data-testid="stSidebar"] .stMetric {
+    background: #f0f2f6;
+    border-radius: 8px;
+    padding: 8px 12px;
+  }
+  
+  /* ===== 출처 표기 컬러 ===== */
+  .source-ref {
+    color: #1565c0;
+    font-size: 0.85rem;
   }
 </style>
 """, unsafe_allow_html=True)
@@ -87,227 +184,84 @@ EMBEDDING_MODEL = "text-embedding-3-large"
 EMBEDDING_DIM = 1536
 
 # =========================
-# 시스템 프롬프트
+# 시스템 프롬프트 (1회 호출 — 용어 + 요약)
 # =========================
-def get_system_prompt() -> str: 
-    """
-    [최적화 v10] 시스템 프롬프트 - 일반화 버전
-    - 특정 수치/케이스 하드코딩 없음
-    - 패턴 기반 규칙
-    """ 
-     
-    base_prompt = """당신은 한국도로공사 '설계실무지침' 전문 수석 엔지니어입니다. 
+def get_system_prompt() -> str:
+    return """당신은 한국도로공사 '설계실무지침' 전문 수석 엔지니어입니다. 
 제공된 RAG 컨텍스트를 분석하여 질문에 대한 정확한 답변을 제공하십시오.
 
-## 표 출력 규칙 (매우 중요!)
-1. 표는 **원본 구조 그대로** Markdown 표로 재현 (절대, 절대, 절대 변경하지 마세요. 원본 그대로 출력하세요.) Never, Never, Never change the table.
-2. 다중 헤더(2단, 3단)는 **최대한 유사하게** 표현
-3. 병합 셀은 반복 또는 빈칸으로 표현
-4. **모든 수치, 괄호, 단위를 정확히** 유지
-5. 표 내용을 인용했으면 반드시, 반드시 표 원본을 그대로 표시하세요 (상세 설명에, 반드시, 꼭)
-6. **취소선(~~) 절대 사용 금지**: 변경 전/후는 "기존: A → 개선: B" 형식으로 표현
-7. **<br> 태그 사용 금지**: 줄바꿈이 필요하면 실제 줄바꿈(엔터)을 사용
+## 표 출력 규칙
+1. 표는 **원본 구조 그대로** Markdown 표로 재현 (절대 변경 금지)
+2. 다중 헤더는 최대한 유사하게 표현
+3. **모든 수치, 괄호, 단위를 정확히** 유지
+4. **취소선(~~) 절대 사용 금지**: "기존: A → 개선: B" 형식
+5. **<br> 태그 사용 금지**: 줄바꿈은 실제 엔터 사용
 
-## 🔴 절대 규칙 (Critical Rules)
-0. '現', '검토배경', '현황', '문제점', '사례조사', '기존' 등은 참조용으로만(절대 결론성으로 이용하지 마세요) 사용하세요. 최종 결과는 개선(안), 변경(안) 등입니다.
-1. **RAG 컨텍스트만 사용**: 외부 지식 금지. 제공된 문서 내에서만 답변.
-2. **검토결과(결론) 최우선**: 문서 내에 '현황'과 '검토결과(개선안)'이 상충할 경우, 반드시 **'검토결과' 또는 '최종 결론'**을 정답으로 채택하십시오.
-3. **표(Table) 절대 보존**: 문서 내의 표는 요약하지 말고, **Markdown 표 포맷을 사용하여 원본 구조 그대로** 출력하십시오. (열/행 변경 금지)
-4. 관련 표가 제시되면, 그 밑에 반드시 표에 대한 요악, 설명 추가
-5. **연도/부서 맞춤형**: 사용자가 특정 연도나 부서를 지정하면 해당 정보를 최우선으로 하고, 지정하지 않으면 **최신 기준**을 중심으로 **연도별 추이**를 설명하십시오.
-6. **있는 연도만 비교**: 특정 연도(예: 2017)를 강제로 찾지 말고, **문서에 실제로 존재하는 연도들(예: 2015, 2019, 2023 등)** 간의 변화를 비교하십시오.
-7. **없으면 솔직히**: 정보가 없으면 "🚫 제공된 문서에서 해당 정보를 찾을 수 없습니다."라고 출력하십시오.
-8. 관련 있으면 모든 사항을 상세설명에서 모두 설명하세요.
+## 절대 규칙
+- '現', '현황', '문제점', '기존' 등은 참조용. 최종 결과는 **개선(안), 변경(안)**.
+- **RAG 컨텍스트만 사용** (외부 지식 금지)
+- **검토결과(결론) 최우선**: '현황'과 '검토결과'가 상충하면 **검토결과**가 정답
+- 없으면 "🚫 해당 정보를 찾을 수 없습니다."
 
-## ⚖️ 정보 인용 우선순위 (Information Hierarchy)
-문서 내용을 분석할 때 다음 순서대로 가중치를 두십시오:
-1. **1순위 (Final Decision)**: '검토결과', '결론', '개선방안', '최종안', '적용방안', '개선', '향후계획' 섹션의 내용
-2. **2순위 (Detailed Specs)**: '세부 기준', '적용 기준', '설계 기준' 등의 구체적 수치
-3. **3순위 (Supporting Info)**: '現', '검토배경', '현황', '문제점', '사례조사' (이는 설명의 보조 자료로만 활용)
-⚠️ **주의**: '현황'이나 '사례조사'에 나온 수치를 최종 기준으로 착각하여 답변하지 마십시오.
+## 정보 인용 우선순위
+1순위: '검토결과', '결론', '개선방안', '적용방안'
+2순위: '세부 기준', '설계 기준' 등 구체적 수치
+3순위: '현황', '사례조사' (보조 자료)
 
-## 📝 출처 표기 (필수 형식)
-**반드시 아래 형식을 정확히 따르세요:**
+## 출처 표기 (필수)
 [챕터 | 제목 | 문서코드 | 날짜]
 
-**예시:**
-[설계행정 | 1-1 특정공법 심의대상 선정절차 개선방안 | 설계처-1036 | 2017.03.30]
-[구조물공 | 3-2 제설염해 방지를 위한 콘크리트 구조물 표면보호재 적용 방안 | 구조물처-3819 | 2024.12.17]
+## 📋 출력 형식
 
+### 📖 용어 설명
+- 질문에 포함된 전문 용어만 간단히 설명 (1~3개)
 
-## 🧠 답변 생성 프로세스
-
-1. **질문 유형 판별**: 단순 조회? 비교/전환? 
-2. **표 열 확인**: "현재" vs "적용(안)" 구분
-3. **정답 추출**: "적용(안)" 열 또는 "검토결과" 섹션에서
-4. **비교 질문이면**: 양쪽 조건 + 비교 + 결론
-5. **표 단순화**: 복잡하면 요약 표 + 설명
-6. **조건 명시**: 설계속도별 등 차이가 있으면 모두 표기
+---
+### 📌 핵심 답변
+- **최종 기준(적용안/개선안)** 값을 명확하게 제시
+- 관련 표가 있으면 원본 그대로 포함하고 간단 설명 추가
+- 비교 질문이면: 기존 → 개선 → 결론
+- 연도별 변경이 있으면 간결하게 추이 정리
+- 조건별(설계속도, 지형 등) 값이 다르면 명시
+- 배경/목적/예외사항도 간결하게 포함
+- 각 항목마다 인라인 출처: ([챕터 | 제목 | 코드 | 날짜])
+- ⚠️ 참조 문서 목록은 출력하지 마세요 (UI에서 별도 표시)
 """
- 
-    output_format = """ 
-## 📋 출력 형식 (3단계 답변)
 
----
-### 📖 용어 설명 (Terminology)
-- **(매우 중요)** 반드시 **'사용자 질문'에 포함된 전문 용어**나, 답변 이해에 필수적인 **핵심 키워드**만 골라서 설명하십시오.
-- ⚠️ **주의**: 질문에 없거나 관련 없는 일반적인 용어(예: BIM, 스마트건설, 4차산업 등)를 습관적으로 넣지 마십시오.
-- **원문 우선**: 검색된 문서 안에 해당 용어의 '정의(Definition)'가 있다면, **문서의 문장을 그대로 인용**하여 적으십시오. (없을 때만 지식 활용)
-
----
-### 📌 간단 요약 (개략 이해용)
-0. '現', '검토배경', '현황', '문제점', '사례조사', '기존' 등은 참조용으로만(절대 결론성으로 이용하지 마세요) 사용하세요. 최종 결과는 개선(안), 변경(안) 등입니다.
-
-**핵심 답변** (상세 답변 기반으로 핵심만 제시, 표는 제시하지 않음)
-- 질문에 대한 **최종 기준(적용안/개선안)** 값 제시
-- 비교/전환 질문이면: 기존 조건 → 적용 기준 → 결론 순서
-- 조건별(설계속도, 지형 등) 값이 다르면 범위 또는 대표값 명시
-
-[출처] : [설계행정 | 1-1 드론라이다 통합측량 확대방안 | 설계처-181 | 2024.01.16]
-
----
-### 📖 상세 설명 (심화 이해용)
-- '現', '검토배경', '현황', '문제점', '사례조사', '기존' 등은 참조용으로만(절대 결론성으로 이용하지 마세요) 사용하세요. 최종 결과는 개선(안), 변경(안) 등입니다.
-
-1. 매우 상세하게 답변하세요.
-- 배경, 목적, 예외사항, 관련 규정까지 포함
-- 각 항목마다 출처 명기:`[챕터 | 제목 | 문서코드 | 날짜]` (구분되게, 줄바꿈해서서)
-
-**검토결과 및 적용기준** (최우선)
-- 문서의 '검토결과', '개선방안', '적용(안)' 열 내용 상세 기술
-- 구체적 수치, 조건, 예외사항 포함
-
-**배경 및 목적** (예시)
-드론라이다 측량기술이 도입되면서 정확한 측량 품질 확보를 위한 명확한 기준 필요성이 대두되었습니다. 2023년 시범운영을 통해 실제 데이터를 수집하고, 이를 기반으로 2024년 구체적 수치 기준을 확립하였습니다.
-([설계행정 | 1-1 드론라이다 통합측량 확대방안 | 설계처-181 | 2024.01.16])
-
-**적용 기준 상세** (예시)
-- 점밀도: **최소 400pts/㎡ 이상**
-- 측정 방법: 전체 측량 구역의 평균 점밀도 산출
-- 검증 절차:
-  1. 시험비행 촬영 실시
-  2. 점밀도 측정 및 감독 확인
-  3. 기준 충족시 본 촬영 진행
-  4. 기준 미달시 장비/촬영조건 변경 후 재촬영
-
-**시범운영 결과 데이터:**
-- 원본 유지, 절대 변경하지 마세요. (표 그대로 출력)
-
-
-([설계행정 | 1-1 드론라이다 통합측량 확대방안 | 설계처-181 | 2024.01.16])
-
-**연도별 변경사항** (예시)
-
-**2017년:**
-- 명확한 점밀도 기준 없음
-- 일반적인 측량 정확도 기준만 존재
-([설계행정 | 2-5 측량 업무처리 기준 | 설계처-892 | 2017.05.20])
-
-**2024년 (개정):**
-- **구체적 수치 기준 신설**: 400pts/㎡
-- 시범운영 데이터 기반 기준 수립
-- 사전 검증 절차 의무화
-([설계행정 | 1-1 드론라이다 통합측량 확대방안 | 설계처-181 | 2024.01.16])
-
-**변경 이유:** (예시)
-드론라이다 기술의 본격 도입으로 객관적이고 명확한 품질 기준이 필요해졌으며, 2023년 시범사업 결과 최소 400pts 이상이 적정하다고 판단되었습니다.
-
-**예외 사항 및 특이사항**
-- 과업지시서에 점밀도 기준을 명시해야 함
-- 기준 미달시 무조건 재촬영 (예외 없음)
-- 장비 성능이 기준을 만족하지 못하면 사용 불가
-([설계행정 | 1-1 드론라이다 통합측량 확대방안 | 설계처-181 | 2024.01.16])
-
-**관련 규정 및 참조**
-- 「드론 활용 측량 업무처리 지침」(국토교통부)
-- 「공간정보 구축 작업규정」
-- 「측량·수로조사 및 지적에 관한 법률」
-([설계행정 | 1-1 드론라이다 통합측량 확대방안 | 설계처-181 | 2024.01.16])
-
----
-
-### 📚 참조 문서 목록
-(연도별 정리)
----
-""" 
-    return base_prompt + output_format
-
-# 유저 프롬프트
 def get_user_prompt(query: str, context: str) -> str:
     return f"""## 🔍 사용자 질문 
-        {query} 
-        
-        ## 📚 참조 문서 (RAG 컨텍스트) 
-        아래 문서들은 **여러 연도(2014~2024)**에 걸쳐 있을 수 있습니다.
-        **모든 관련 문서를 종합**하여 답변하세요.
+{query} 
 
-        {context} 
-        
-        ## 📝 지시사항 (필수 준수)
-        0. 제발, 검토, 현황, 문제점, 분석 등은 최종 결과가 아닙니다(이것은 참조용으로만). 반드시 고려해주세요. 최종 결과는 개선(안) 등입니다.
-        - 현황, 現, 실태, 문제점, 기존 등은 참조용으로만(절대 결론성으로 이용하지 마세요) 사용하세요. 최종 결과는 개선(안) 등입니다.
-        - 표 구조를 정확하게 읽으세요. 수치데이타 등(현재 vs 개선안 비교 시 등... 비교 되는 것을 면밀하게 분석해서 이에 대한 명확한 설명을 하세요)
-        - 표는 절대 변경하지 마세요. 원본 그대로 출력하세요.
+## 📚 참조 문서 (RAG 컨텍스트) 
+아래 문서들은 **여러 연도(2014~2024)**에 걸쳐 있을 수 있습니다.
 
-        1. **질문 키워드 확인**: 질문의 핵심 키워드가 문서에 있는지 확인
+{context} 
 
-        2. **유사 개념도 활용**: 직접 언급이 없어도 유사한 개념, 관련 규정이 있으면 활용
-
-        3. **연도별 종합 및 추이 분석**:
-        - 여러 연도 문서가 있으면 **모두 참조**
-        - **연도순으로 정리**: 2017년 → 2020년 → 2024년
-        - 계수나 기준이 변경되었으면 **변화 추이를 명확히 표시**
-        - 변경 이유나 배경도 함께 설명
-
-        4. **부분 관련 정보도 제공**: 
-        - 질문과 완전히 일치하지 않아도 **참고가 될 정보는 제공**
-        - "직접적인 기준은 없으나, 관련 규정은..." 형식으로
-
-        5. **정확한 인용**: 
-        - 수치, 기준, 조건은 정확히 인용 (수식, 첨자 포함)
-        - 원본 표현 그대로 유지
-
-        6. **표 처리**: 
-        - 표 내용을 인용했으면 반드시, 반드시 표 원본을 그대로 표시하세요 (상세 설명에, 반드시, 꼭)
-        - 표는 절대, 절대, 절대대 변경하지 마세요. 원본 그대로 출력하세요.
-        - 표가 있으면 **마크다운 표 형식 그대로** 포함
-        - `<br>`, `&nbsp;` 등은 일반 텍스트로 변환
-        - 표 앞뒤로 빈 줄 추가
-        - 수치나 구조 절대 변경 금지
-
-        7. **출처 명시 (필수 형식)**: 
-        ```
-        [챕터 | 제목 | 문서코드 | 날짜]
-        ```
-        - 각 정보마다 반드시 출처 표기
-        - 챕터, 제목, 코드, 날짜 **모두 필수**
-        - 구분자는 `|` (파이프) 사용
-
-        8. **2단계 답변 구성**:
-        - **1단계 (간단 요약)**: 핵심만 간결하게, 하지만 중요한 내용은 모두 포함
-        - **2단계 (상세 설명)**: 배경, 목적, 예외사항, 관련 규정까지 포함
-
-        9. **"없음" 최소화**: 
-        - 정말로 전혀 관련 없을 때만 "찾을 수 없다"고 답변
-        - 부분적이라도 관련 있으면 제공
-
-        10. **연도별 문서 목록**:
-            - 마지막에 참조 문서를 **연도별로 그룹핑**하여 정리
-        """ 
+## 📝 지시사항
+- 현황/문제점은 참조용, 최종 결과는 개선(안)
+- 표는 원본 그대로 출력
+- 여러 연도 문서가 있으면 연도순 정리
+- 각 정보마다 출처 표기: [챕터 | 제목 | 코드 | 날짜]
+- 참조 문서 목록은 출력하지 마세요
+""" 
                 
 
 # =========================
 # 텍스트 전처리 함수
 # =========================
 def clean_text_for_display(text: str) -> str:
-    """출처 표시용 텍스트 전처리"""
+    """출처 표시용 텍스트 전처리 — <br> 및 HTML 태그 완전 제거"""
     if not text:
         return ""
     
+    # 🔥 <br> 변환 (다양한 패턴)
     text = re.sub(r'<br\s*/?>', '\n', text, flags=re.IGNORECASE)
+    
+    # <sup>, <sub> 변환
     text = re.sub(r'<sup>(.*?)</sup>', r'^(\1)', text)
     text = re.sub(r'<sub>(.*?)</sub>', r'_(\1)', text)
     
+    # HTML 엔티티 변환
     html_entities = {
         '&nbsp;': ' ', '&lt;': '<', '&gt;': '>',
         '&amp;': '&', '&quot;': '"', '&#39;': "'",
@@ -316,6 +270,10 @@ def clean_text_for_display(text: str) -> str:
     for entity, char in html_entities.items():
         text = text.replace(entity, char)
     
+    # 🔥 나머지 HTML 태그 모두 제거
+    text = re.sub(r'<[^>]+>', '', text)
+    
+    # 과도한 줄바꿈 정리
     text = re.sub(r'\n{3,}', '\n\n', text)
     
     return text.strip()
@@ -353,6 +311,7 @@ class PineconeRAG:
     def __init__(self):
         self.client: OpenAI = None  # 임베딩용
         self.anthropic_client: Anthropic = None  # 🔥 추가 (LLM용)
+        self.cohere_client = None  # 🔥 Reranker용
         self.pc: Pinecone = None
         self.index = None
         self.namespace_map = {}
@@ -377,11 +336,13 @@ class PineconeRAG:
         api_key_openai = get_api_key("OPENAI_API_KEY")
         api_key_anthropic = get_api_key("ANTHROPIC_API_KEY")
         api_key_pinecone = get_api_key("PINECONE_API_KEY")
+        api_key_cohere = get_api_key("COHERE_API_KEY")  # 🔥 Reranker
         
         # 🔥 디버깅: 키 존재 확인
         print(f"🔑 OpenAI Key: {bool(api_key_openai)}")
         print(f"🔑 Anthropic Key: {bool(api_key_anthropic)}")
         print(f"🔑 Pinecone Key: {bool(api_key_pinecone)}")
+        print(f"🔑 Cohere Key: {bool(api_key_cohere)}")
         
         # API 키 검증
         if not api_key_openai:
@@ -408,6 +369,13 @@ class PineconeRAG:
             self.pc = Pinecone(api_key=api_key_pinecone)
             self.index = self.pc.Index(INDEX_NAME)
             print("✅ Pinecone 클라이언트 초기화 성공")
+            
+            # 🔥 Cohere Reranker 초기화 (선택적 - 없어도 동작)
+            if COHERE_AVAILABLE and api_key_cohere:
+                self.cohere_client = cohere.ClientV2(api_key=api_key_cohere)
+                print("✅ Cohere Reranker 초기화 성공")
+            else:
+                print("⚠️ Cohere 미설정 - 키워드 부스팅으로 대체")
             
             self._build_namespace_map()
             
@@ -497,9 +465,8 @@ class PineconeRAG:
             print(f"🕵️‍♂️ [Auto-Filter] 연도 감지: {filters['year']}")
 
         # (2) 부서 추출 (설계처, 구조물처 등 'OO처' 패턴)
-        # 이미 필터에 없으면 쿼리에서 찾아서 넣음
+        # ⚠️ "단부처리", "처리", "처분" 등 오탐 방지: 처 뒤에 한글이 오면 부서가 아님
         if "dept" not in filters:
-            # dept_match = re.search(r'([가-힣]+처)', query)
             dept_match = re.search(r'([가-힣]+처)(?![가-힣])', query)
             if dept_match:
                 filters["dept"] = dept_match.group(1)
@@ -533,22 +500,143 @@ class PineconeRAG:
                 
                 results = self.index.query(**search_params)
                 
-                for match in results.get("matches", []):
+                # Pinecone SDK 버전 호환 (dict / object 모두 대응)
+                matches = getattr(results, 'matches', None) or results.get("matches", [])
+                for match in matches:
+                    match_id = getattr(match, 'id', None) or match.get("id", "")
+                    match_score = getattr(match, 'score', 0) or match.get("score", 0)
+                    match_meta = getattr(match, 'metadata', {}) or match.get("metadata", {})
+                    # metadata가 dict가 아닐 수 있으므로 변환
+                    if not isinstance(match_meta, dict):
+                        match_meta = dict(match_meta) if match_meta else {}
                     raw_results.append({
-                        "id": match["id"],
-                        "score": match["score"],
+                        "id": match_id,
+                        "score": match_score,
                         "namespace": ns,
-                        "metadata": match.get("metadata", {})
+                        "metadata": match_meta
                     })
-            except: continue
+            except Exception as e:
+                print(f"⚠️ [Search Error] namespace={ns}, error={e}")
+                continue
+
+        # 🔥 디버깅 로그
+        print(f"🔍 [Search Debug] query='{query}', search_query='{search_query}'")
+        print(f"🔍 [Search Debug] filters={filters}, namespaces_count={len(namespaces)}")
+        print(f"🔍 [Search Debug] raw_results_count={len(raw_results)}")
+        if raw_results:
+            print(f"🔍 [Search Debug] top3: {[(r['score'], r['metadata'].get('title','')[:30]) for r in sorted(raw_results, key=lambda x: x['score'], reverse=True)[:3]]}")
 
         # ------------------------------------------------------------
-        # 3. 키워드 기반 점수 부스팅 (Lexical Re-ranking)
+        # 3. 🔥 Cohere Reranker 또는 키워드 부스팅 (Fallback)
         # ------------------------------------------------------------
+        if self.cohere_client and raw_results:
+            try:
+                # (A) Reranker 적용
+                docs_text = [doc["metadata"].get("text", "")[:1000] for doc in raw_results]
+                
+                rerank_resp = self.cohere_client.rerank(
+                    model="rerank-multilingual-v3.0",
+                    query=query,
+                    documents=docs_text,
+                    top_n=min(len(raw_results), top_k * 3)  # 넉넉하게 확보
+                )
+                
+                # rerank 결과로 점수 교체
+                reranked = []
+                for r in rerank_resp.results:
+                    doc = raw_results[r.index].copy()
+                    doc["original_score"] = doc["score"]
+                    doc["score"] = r.relevance_score  # Cohere 점수로 교체
+                    doc["keyword_matches"] = 0  # reranker 사용시 불필요
+                    reranked.append(doc)
+                
+                raw_results = reranked
+                print(f"🔄 [Reranker] {len(reranked)}개 재정렬 완료")
+                if reranked:
+                    top3_info = [(f"{r['score']:.4f}", r['metadata'].get('title','')[:30]) for r in reranked[:3]]
+                    print(f"🔄 [Reranker] top3: {top3_info}")
+                
+            except Exception as e:
+                print(f"⚠️ [Reranker Error] {e} → 키워드 부스팅으로 대체")
+                # Fallback: 기존 키워드 부스팅
+                self._keyword_boosting(raw_results, query)
+        else:
+            # Cohere 미설정시 기존 키워드 부스팅
+            self._keyword_boosting(raw_results, query)
+
+        # ------------------------------------------------------------
+        # 4. 🔥 형제 청크 확장 (Sibling Expansion)
+        #    - 같은 문서(예: p6-2)의 다른 파트를 자동 포함
+        #    - 검토결론 등 핵심 청크 누락 방지
+        # ------------------------------------------------------------
+        # 상위 top_k개에 'search' 태그
+        for doc in raw_results[:top_k]:
+            doc["source_type"] = "search"
+        
+        found_prefixes = set()
+        for doc in raw_results[:top_k]:
+            cid = doc["metadata"].get("chunk_id", "")
+            if "_p" in cid:
+                prefix = cid.rsplit("_p", 1)[0]
+                found_prefixes.add(prefix)
+        
+        # 전체 raw_results에서 형제 청크 찾기
+        sibling_docs = []
+        top_ids = {doc["id"] for doc in raw_results[:top_k]}
+        
+        for doc in raw_results[top_k:]:
+            cid = doc["metadata"].get("chunk_id", "")
+            if "_p" in cid:
+                prefix = cid.rsplit("_p", 1)[0]
+                if prefix in found_prefixes and doc["id"] not in top_ids:
+                    doc["source_type"] = "sibling"
+                    sibling_docs.append(doc)
+                    top_ids.add(doc["id"])
+        
+        if sibling_docs:
+            print(f"🔗 [Sibling] {len(sibling_docs)}개 형제 청크 추가: {[d['metadata'].get('chunk_id','') for d in sibling_docs]}")
+
+        # ------------------------------------------------------------
+        # 5. 최종 결과 조합
+        # ------------------------------------------------------------
+        final_results = raw_results[:top_k] + sibling_docs
+        
+        # 중복 제거
+        seen_ids = set()
+        deduped = []
+        for doc in final_results:
+            if doc["id"] not in seen_ids:
+                seen_ids.add(doc["id"])
+                deduped.append(doc)
+        final_results = deduped
+        
+        # 최종 정렬: 같은 문서는 파트 순서대로 모으기
+        def sort_key(doc):
+            cid = doc["metadata"].get("chunk_id", "")
+            if "_p" in cid:
+                prefix, part = cid.rsplit("_p", 1)
+                try:
+                    part_num = int(part)
+                except:
+                    part_num = 0
+            else:
+                prefix = cid
+                part_num = 0
+            return (-doc["score"], prefix, part_num)
+        
+        final_results.sort(key=sort_key)
+        
+        search_count = sum(1 for d in final_results if d.get("source_type") == "search")
+        sibling_count = len(sibling_docs)
+        print(f"📊 [Final] {len(final_results)}개 반환 (검색: {search_count}, 형제: {sibling_count})")
+        
+        return final_results
+    
+    def _keyword_boosting(self, raw_results: List[Dict], query: str):
+        """키워드 기반 점수 부스팅 (Cohere 미사용시 Fallback)"""
         clean_q = re.sub(r"[^\w\s]", " ", query)
         query_words = [w for w in clean_q.split() if len(w) >= 2]
         
-        # '개선', '적용', '표' 관련 키워드는 정답일 확률이 높으므로 추가 가산점
         bonus_keywords = ["개선", "적용", "검토", "결과", "표"]
 
         for doc in raw_results:
@@ -558,68 +646,24 @@ class PineconeRAG:
             
             match_score = 0
             
-            # (1) 질문 단어 매칭
             for word in query_words:
                 if word in full_text: match_score += 0.05
             
-            # (2) 구문 매칭 (강력)
             if len(query_words) >= 2:
                 for i in range(len(query_words)-1):
                     phrase = f"{query_words[i]} {query_words[i+1]}"
                     if phrase in full_text: match_score += 0.3
             
-            # (3) 정답 시그널 보너스
             for bk in bonus_keywords:
                 if bk in full_text: match_score += 0.05
 
             doc["score"] += match_score
             doc["keyword_matches"] = int(match_score * 10)
-
-        # ------------------------------------------------------------
-        # 4. 🔥 [핵심] 연도별 쿼터제 적용 (Diversity Strategy)
-        # ------------------------------------------------------------
-        # 문서를 연도별로 그룹화
-        docs_by_year = defaultdict(list)
-        for doc in raw_results:
-            y = doc["metadata"].get("year", "Unknown")
-            docs_by_year[y].append(doc)
         
-        final_results = []
-        selected_ids = set()
-
-        # (1) 각 연도별로 점수가 가장 높은 상위 2개 무조건 확보
-        # 연도 역순(최신순)으로 순회
-        # sorted_years = sorted(docs_by_year.keys(), reverse=True)        
-        sorted_years = sorted(docs_by_year.keys(), key=lambda x: str(x) if x is not None else "", reverse=True)
-        
-        # for year in sorted_years:
-        #     # 해당 연도 문서들을 점수순 정렬
-        #     docs_by_year[year].sort(key=lambda x: x["score"], reverse=True)
-            
-        #     # 상위 2개 추출 (있으면)
-        #     top_2_docs = docs_by_year[year][:2]
-        #     for doc in top_2_docs:
-        #         final_results.append(doc)
-        #         selected_ids.add(doc["id"])
-        
-        # (2) 남은 공간(top_k) 채우기
-        # 전체 리스트를 다시 점수순으로 정렬하여, 아직 선택 안 된 고득점 문서 추가
         raw_results.sort(key=lambda x: x["score"], reverse=True)
-        
-        for doc in raw_results:
-            if len(final_results) >= top_k:
-                break
-            if doc["id"] not in selected_ids:
-                final_results.append(doc)
-                selected_ids.add(doc["id"])
-        
-        # (3) 최종 정렬 (LLM에게는 점수 높은 순서대로 주는 것이 좋음)
-        final_results.sort(key=lambda x: x["score"], reverse=True)
-        
-        return final_results
     
-    def build_context(self, results: List[Dict], max_chunks: int = 10) -> str:
-        """검색 결과를 LLM 컨텍스트로 변환"""
+    def build_context(self, results: List[Dict], max_chunks: int = 15) -> str:
+        """검색 결과를 LLM 컨텍스트로 변환 (br 태그 완전 제거)"""
         context_parts = []
         
         for i, doc in enumerate(results[:max_chunks], 1):
@@ -632,13 +676,17 @@ class PineconeRAG:
             dept = meta.get("dept", "N/A")
             year = meta.get("year", "N/A")
             category = meta.get("category", "N/A")
+            chunk_id = meta.get("chunk_id", "")
+            source_type = doc.get("source_type", "search")
+            tag = "🔍검색" if source_type == "search" else "🔗형제"
             
             raw_text = meta.get("text", "")
+            # 🔥 <br> 및 HTML 태그 완전 제거
             text = clean_text_for_display(raw_text)
             
             context_parts.append(
                 f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                f"📄 [문서 {i}] 유사도: {score:.4f}\n"
+                f"📄 [문서 {i}] ({tag}) {chunk_id} | 유사도: {score:.4f}\n"
                 f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
                 f"• 코드: {code}\n"
                 f"• 날짜: {date}\n"
@@ -661,9 +709,7 @@ class PineconeRAG:
         try:
             response_text = ""
             
-            # 🔥 모델 타입에 따라 분기
             if model.startswith("claude"):
-                # ✅ Claude 사용
                 with self.anthropic_client.messages.stream(
                     model=model,
                     max_tokens=10000,
@@ -678,7 +724,6 @@ class PineconeRAG:
                         placeholder.markdown(response_text + "▌")
             
             else:
-                # ✅ GPT 사용
                 stream = self.client.chat.completions.create(
                     model=model,
                     messages=[
@@ -693,6 +738,9 @@ class PineconeRAG:
                     if chunk.choices and chunk.choices[0].delta and chunk.choices[0].delta.content:
                         response_text += chunk.choices[0].delta.content
                         placeholder.markdown(response_text + "▌")
+            
+            # 🔥 LLM 응답에서 <br> 태그 제거
+            response_text = re.sub(r'<br\s*/?>', '\n', response_text, flags=re.IGNORECASE)
             
             placeholder.markdown(response_text)
             return response_text
@@ -716,7 +764,7 @@ class PineconeRAG:
 # 참조 문서 렌더링
 # =========================
 def render_source_card(doc: Dict, rank: int, msg_idx: int = 0):
-    """참조 문서 카드 렌더링"""
+    """참조 문서 카드 렌더링 (컬러 배지)"""
     meta = doc["metadata"]
     score = doc["score"]
     
@@ -725,7 +773,11 @@ def render_source_card(doc: Dict, rank: int, msg_idx: int = 0):
     date = meta.get("date", "")
     dept = meta.get("dept", "")
     year = meta.get("year", "")
-    category = meta.get("category", "")
+    chunk_id = meta.get("chunk_id", "")
+    source_type = doc.get("source_type", "search")
+    
+    type_icon = "🔍" if source_type == "search" else "🔗"
+    type_label = "검색" if source_type == "search" else "형제확장"
     
     raw_text = meta.get("text", "")
     cleaned_text = clean_text_for_display(raw_text)
@@ -736,27 +788,20 @@ def render_source_card(doc: Dict, rank: int, msg_idx: int = 0):
     
     unique_key = f"m{msg_idx}_r{rank}_{doc['id'][:8]}"
     
-    # 🔥 키워드 매칭 정보 표시
-    keyword_info = ""
-    if "keyword_matches" in doc and doc["keyword_matches"] > 0:
-        keyword_info = f" 🔍+{doc['keyword_matches']}"
-    
-    with st.expander(f"📄 [{rank}] {code} - {title} (유사도: {score:.4f}){keyword_info}", expanded=False):
-        col1, col2, col3, col4 = st.columns(4)
-        with col1:
-            st.markdown(f"**코드:** `{code}`")
-        with col2:
-            st.markdown(f"**날짜:** {date}")
-        with col3:
-            st.markdown(f"**부서:** {dept}")
-        with col4:
-            st.markdown(f"**연도:** {year}")
-        
-        if category and category != "N/A":
-            st.markdown(f"**분류:** {category}")
+    with st.expander(
+        f"{type_icon} [{rank}] {chunk_id} — {title} | {code} ({date}) | {score:.3f}",
+        expanded=False
+    ):
+        # 배지 HTML
+        badge_class = "badge-search" if source_type == "search" else "badge-sibling"
+        st.markdown(
+            f'<span class="{badge_class}">{type_label}</span> '
+            f'<span class="badge-llm">LLM 전달</span> '
+            f'&nbsp; 부서: {dept} | 연도: {year} | 유사도: {score:.4f}',
+            unsafe_allow_html=True
+        )
         
         st.markdown("---")
-        st.markdown("**📝 본문 내용:**")
         st.markdown(preview_text)
         
         if has_more:
@@ -769,32 +814,93 @@ def render_source_card(doc: Dict, rank: int, msg_idx: int = 0):
             
             if st.session_state[show_full_key]:
                 st.markdown("---")
-                st.markdown("**[전체 내용]**")
                 st.markdown(cleaned_text)
 
 
-def render_source_summary(results: List[Dict]):
-    """참조 문서 요약 표시"""
+def render_source_summary(results: List[Dict], max_chunks: int = 15):
+    """참조 문서 요약 — 문서별 그룹핑, 컬러 배지, LLM 전달 여부"""
     if not results:
         return
     
-    st.markdown("**📚 참조 문서 목록:**")
+    search_count = sum(1 for d in results if d.get("source_type") == "search")
+    sibling_count = sum(1 for d in results if d.get("source_type") == "sibling")
+    llm_count = min(len(results), max_chunks)
     
-    summary_lines = []
+    # 상단 요약 바
+    st.markdown(f"""
+    <div class="search-summary-bar">
+        <div class="stat">🔍 <span class="stat-num">{search_count}</span> 검색</div>
+        <div class="stat">🔗 <span class="stat-num">{sibling_count}</span> 형제 확장</div>
+        <div class="stat">📤 <span class="stat-num">{llm_count}</span> LLM 전달</div>
+        <div class="stat">📄 <span class="stat-num">{len(results)}</span> 총 문서</div>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # 문서별 그룹핑
+    from collections import OrderedDict
+    doc_groups = OrderedDict()
+    
     for i, doc in enumerate(results, 1):
         meta = doc["metadata"]
         code = meta.get("code", "N/A")
         title = meta.get("title", "제목 없음")
-        date = meta.get("date", "")
+        group_key = f"{code}|{title}"
+        
+        if group_key not in doc_groups:
+            doc_groups[group_key] = {
+                "code": code,
+                "title": title,
+                "date": meta.get("date", ""),
+                "dept": meta.get("dept", ""),
+                "chunks": [],
+                "best_score": 0,
+                "has_sibling": False,
+            }
+        
+        chunk_id = meta.get("chunk_id", "")
+        source_type = doc.get("source_type", "search")
+        is_llm = i <= max_chunks
         score = doc["score"]
         
-        keyword_info = ""
-        if "keyword_matches" in doc and doc["keyword_matches"] > 0:
-            keyword_info = f" 🔍+{doc['keyword_matches']}"
+        if source_type == "sibling":
+            doc_groups[group_key]["has_sibling"] = True
         
-        summary_lines.append(f"{i}. `{code}` - {title} ({date}) [유사도: {score:.3f}]{keyword_info}")
+        doc_groups[group_key]["chunks"].append({
+            "chunk_id": chunk_id,
+            "source_type": source_type,
+            "is_llm": is_llm,
+            "score": score,
+        })
+        
+        if score > doc_groups[group_key]["best_score"]:
+            doc_groups[group_key]["best_score"] = score
     
-    st.markdown("\n".join(summary_lines))
+    # 문서별 카드 출력
+    for gkey, group in doc_groups.items():
+        chunks = group["chunks"]
+        
+        # 청크 pills HTML
+        pills_html = ""
+        for c in chunks:
+            css_type = "search" if c["source_type"] == "search" else "sibling"
+            css_llm = "llm-yes" if c["is_llm"] else "llm-no"
+            icon = "🔍" if c["source_type"] == "search" else "🔗"
+            llm_icon = "✅" if c["is_llm"] else ""
+            pills_html += f'<span class="chunk-pill {css_type} {css_llm}">{llm_icon}{icon} {c["chunk_id"]}</span>'
+        
+        border_class = "has-sibling" if group["has_sibling"] else ""
+        
+        st.markdown(f"""
+        <div class="doc-group-card {border_class}">
+            <div class="doc-group-title">{group['code']} — {group['title']}</div>
+            <div class="doc-group-meta">
+                📅 {group['date']} &nbsp;|&nbsp; 🏢 {group['dept']} &nbsp;|&nbsp; 
+                ⭐ 최고 유사도: {group['best_score']:.3f} &nbsp;|&nbsp; 
+                📦 청크 {len(chunks)}개
+            </div>
+            <div class="chunk-pills">{pills_html}</div>
+        </div>
+        """, unsafe_allow_html=True)
 
 
 # =========================
@@ -820,7 +926,7 @@ def scroll_to_bottom():
 # =========================
 def main():
     st.title("🏗️ 설계실무지침 AI 검색")
-    st.caption("Pinecone RAG + GPT 기반 질의응답 시스템 v3 + Lexical Re-rank")
+    st.caption("Pinecone RAG + Claude/GPT + Reranker + 형제 청크 확장")
     
     # 세션 상태 초기화
     if "rag" not in st.session_state:
@@ -929,9 +1035,9 @@ def main():
            
             # 검색 설정
             st.subheader("🔍 검색 설정")
-            top_k = st.slider("검색 결과 수", 3, 30, 10,
-                             help="최종 반환 문서 수 (내부적으로 5배 많이 검색)")
-            context_chunks = st.slider("LLM 컨텍스트 문서 수", 3, 30, 10,
+            top_k = st.slider("검색 결과 수", 3, 30, 15,
+                             help="최종 반환 문서 수 (+ 형제 청크 자동 확장)")
+            context_chunks = st.slider("LLM 컨텍스트 문서 수", 3, 30, 15,
                                        help="LLM에 전달할 최대 문서 수")
             
             use_keyword_extraction = st.checkbox("키워드 추출 사용", value=True,
@@ -1029,23 +1135,21 @@ def main():
             with st.chat_message("assistant"):
                 st.markdown(msg["content"])
                 if "sources" in msg and msg["sources"]:
-                    with st.expander("📚 참조 문서", expanded=False):
-                        render_source_summary(msg["sources"])
+                    with st.expander(f"📚 참조 문서 ({len(msg['sources'])}개)", expanded=False):
+                        render_source_summary(msg["sources"], max_chunks=context_chunks)
                         st.markdown("---")
-                        for i, doc in enumerate(msg["sources"], 1):
+                        for i, doc in enumerate(msg["sources"][:context_chunks], 1):
                             render_source_card(doc, i, msg_idx=msg_idx)
     
     # =========================
-    # 🔥 입력 처리 (pending_query 우선)
+    # 입력 처리
     # =========================
     query = None
     
-    # 1. pending_query가 있으면 사용
     if st.session_state.pending_query:
         query = st.session_state.pending_query
         st.session_state.pending_query = None
     
-    # 2. chat_input 항상 표시
     chat_query = st.chat_input("질문을 입력하세요...")
     if chat_query and not query:
         query = chat_query
@@ -1054,23 +1158,20 @@ def main():
     # 질의응답 처리
     # =========================
     if query:
-        # 사용자 메시지 추가
         st.session_state.messages.append({"role": "user", "content": query})
         
         with st.chat_message("user"):
             st.markdown(query)
         
-        # 어시스턴트 응답
         with st.chat_message("assistant"):
-            # 필터 구성
             filters = {}
             if filter_dept:
                 filters["dept"] = filter_dept
             if filter_year > 0:
                 filters["year"] = filter_year
             
-            # 검색
-            with st.spinner("🔍 문서 검색 중... (50개 검색 → 재정렬)"):
+            reranker_label = "Reranker" if getattr(rag, 'cohere_client', None) else "키워드 부스팅"
+            with st.spinner("🔍 문서 검색 중..."):
                 t0 = time.time()
                 results = rag.search(
                     query=query,
@@ -1086,40 +1187,39 @@ def main():
                 response = "검색 결과가 없습니다. 다른 질문을 시도해주세요."
                 used_sources = []
             else:
-                # 🔥 키워드 매칭 정보 표시
-                keyword_boosted = sum(1 for doc in results if doc.get("keyword_matches", 0) > 0)
-                st.caption(f"✅ {len(results)}개 문서 검색 완료 ({search_time:.2f}초) | 키워드 부스팅: {keyword_boosted}개")
+                search_count = sum(1 for d in results if d.get("source_type") == "search")
+                sibling_count = sum(1 for d in results if d.get("source_type") == "sibling")
+                llm_count = min(len(results), context_chunks)
+                st.caption(
+                    f"✅ 총 {len(results)}개 ({search_time:.2f}초) | "
+                    f"🔍{search_count} + 🔗{sibling_count} | "
+                    f"📤LLM: {llm_count}개 | {reranker_label}"
+                )
                 
-                # 컨텍스트 구성
                 context = rag.build_context(results, max_chunks=context_chunks)
                 
-                # LLM 응답 생성
                 placeholder = st.empty()
                 response = rag.generate_response_streaming(
                     query, context, selected_model, placeholder,
                 )
                 
-                # 참조 문서 표시
-                with st.expander("📚 참조 문서", expanded=False):
-                    render_source_summary(results)
+                # 참조 문서 (context_chunks개 통일)
+                with st.expander(f"📚 참조 문서 ({len(results)}개)", expanded=False):
+                    render_source_summary(results, max_chunks=context_chunks)
                     st.markdown("---")
                     current_msg_idx = len(st.session_state.messages)
-                    for i, doc in enumerate(results, 1):
+                    for i, doc in enumerate(results[:context_chunks], 1):
                         render_source_card(doc, i, msg_idx=current_msg_idx)
                 
                 used_sources = results
         
-        # 메시지 저장
         st.session_state.messages.append({
             "role": "assistant",
             "content": response,
-            "sources": used_sources
+            "sources": used_sources,
         })
         
-        # 🔥 자동 스크롤 (답변 후)
         scroll_to_bottom()
-        
-        # 🔥 즉시 리렌더링 (입력창 유지)
         st.rerun()
 
 
