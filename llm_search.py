@@ -586,8 +586,8 @@ class PineconeRAG:
 
         # (1) 각 연도별로 점수가 가장 높은 상위 2개 무조건 확보
         # 연도 역순(최신순)으로 순회
-        # sorted_years = sorted(docs_by_year.keys(), reverse=True)
-        sorted_years = sorted(docs_by_year.keys(), key=lambda x: (x is None, x if x is not None else 0), reverse=True)
+        # sorted_years = sorted(docs_by_year.keys(), reverse=True)        
+        sorted_years = sorted(docs_by_year.keys(), key=lambda x: str(x) if x is not None else "", reverse=True)
         
         # for year in sorted_years:
         #     # 해당 연도 문서들을 점수순 정렬
