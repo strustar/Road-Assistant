@@ -1017,18 +1017,34 @@ def main():
             # LLM 설정
             st.subheader("🤖 LLM 설정")
             model_options = {
-                "Claude 4 Sonnet (추천)": "claude-sonnet-4-20250514",
-                "Claude 3.5 Sonnet": "claude-3-5-sonnet-20241022",
-                "Claude 3 Haiku (저비용)": "claude-3-haiku-20240307",
-                "GPT-4o-mini": "gpt-4o-mini",
-                "GPT-4o": "gpt-4o",
+                "⭐ Sonnet 4.6 — $3/$15 | 한국어최고 | RAG최적": "claude-sonnet-4-6",
+                "💰 GPT-5.2 — $1.75/$14 | 가성비왕 | 영어강점": "gpt-5.2",
+                "🪙 Haiku 4.5 — $1/$5 | 한국어양호 | 빠름": "claude-haiku-4-5-20251001",
+                "🪙 GPT-5 mini — $0.25/$2 | 초저가 | 단순RAG": "gpt-5-mini",
+                "🆓 GPT-5 nano — $0.05/$0.4 | 최저가 | 분류전용": "gpt-5-nano",
+                "🪙 GPT-4o mini — $0.15/$0.6 | 구형저가 | 안정적": "gpt-4o-mini",
             }
             selected_model_name = st.selectbox("모델", list(model_options.keys()))
             selected_model = model_options[selected_model_name]
             
-            custom_model = st.text_input("커스텀 모델명", placeholder="예: gpt-4.5-preview")
+            custom_model = st.text_input("커스텀 모델명", placeholder="예: claude-sonnet-4-20250514")
             if custom_model.strip():
                 selected_model = custom_model.strip()
+            
+            # 💰 비용·성능 요약
+            st.caption("📊 **100명×10건/일 월비용 추정**")
+            st.markdown("""
+            <div style="font-size:0.72rem;line-height:1.7;color:#999;">
+            ⭐ <b>Sonnet 4.6</b> ~₩67만 | 한국어·지시따르기·할루시네이션 최소<br>
+            💰 <b>GPT-5.2</b> ~₩43만 | Sonnet급 성능, 42%저렴<br>
+            🪙 <b>Haiku 4.5</b> ~₩24만 | 간단 RAG 충분, 한국어 양호<br>
+            🪙 <b>GPT-5 mini</b> ~₩9만 | 영어 중심, 한국어 보통<br>
+            🆓 <b>GPT-5 nano</b> ~₩2만 | 분류·라우팅 전용<br>
+            ─────────<br>
+            <span style="color:#4caf50;">💡 한국어 설계지침 RAG → Sonnet 4.6 추천<br>
+            💡 예산 절감 → Haiku 4.5가 차선책</span>
+            </div>
+            """, unsafe_allow_html=True)
             
             st.divider()
             
