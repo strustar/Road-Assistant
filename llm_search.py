@@ -396,7 +396,7 @@ class PineconeRAG:
             
            # 🔥 자동으로 2014~2030년 모두 매칭
             known_folders = []
-            for year in range(2014, 2031):
+            for year in range(2001, 2031):
                 known_folders.append(f"설계실무지침/{year}")
                 known_folders.append(f"설계실무지침_{year}")
                 
@@ -985,13 +985,19 @@ def main():
                 total_vectors = stats.get("total_vector_count", 0)
                 st.metric("📊 총 벡터 수", f"{total_vectors:,}")
                 
-                namespaces = stats.get("namespaces", {})
-                if namespaces:
-                    with st.expander("📁 Namespace 상세"):
-                        for ns, info in namespaces.items():
-                            display_name = rag.namespace_map.get(ns, ns) or "(기본)"
-                            count = info.get("vector_count", 0)
-                            st.text(f"{display_name}: {count:,}개")
+            namespaces = stats.get("namespaces", {})
+            if namespaces:
+                with st.expander("📁 Namespace 상세"):
+                    # ⭐ 연도순 정렬 (설계실무지침/2013 → 2014 → ...)
+                    def _sort_key(item):
+                        display = rag.namespace_map.get(item[0], item[0]) or ""
+                        m = re.search(r'(\d{4})', display)
+                        return int(m.group(1)) if m else 9999
+                    
+                    for ns, info in sorted(namespaces.items(), key=_sort_key):
+                        display_name = rag.namespace_map.get(ns, ns) or "(기본)"
+                        count = info.get("vector_count", 0)
+                        st.text(f"{display_name}: {count:,}개")
             
             st.divider()
             
