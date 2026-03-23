@@ -994,7 +994,7 @@ def main():
                         m = re.search(r'(\d{4})', display)
                         return int(m.group(1)) if m else 9999
                     
-                    for ns, info in sorted(namespaces.items(), key=_sort_key):
+                    for ns, info in sorted(namespaces.items(), key=_sort_key, reverse=True):
                         display_name = rag.namespace_map.get(ns, ns) or "(기본)"
                         count = info.get("vector_count", 0)
                         st.text(f"{display_name}: {count:,}개")
