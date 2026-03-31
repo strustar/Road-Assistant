@@ -479,12 +479,18 @@ class PineconeRAG:
         if filters is None:
             filters = {}
 
-        # (1) 연도 추출 (2000~2030)
+        # (1) 연도 추출 → namespace 필터로 적용
         year_match = re.search(r'(20[0-3]\d)', query)
-        # 사용자가 사이드바에서 연도를 지정하지 않았을 때만 쿼리 기반 필터 적용
-        if year_match and "year" not in filters:
-            filters["year"] = int(year_match.group(1))
-            print(f"🕵️‍♂️ [Auto-Filter] 연도 감지: {filters['year']}")
+        if year_match:
+            detected_year = year_match.group(1)
+            print(f"🕵️‍♂️ [Auto-Filter] 연도 감지: {detected_year} → namespace 필터")
+            import hashlib
+            year_ns = hashlib.md5(f"설계실무지침/{detected_year}".encode()).hexdigest()
+            if namespaces:
+                if year_ns in namespaces:
+                    namespaces = [year_ns]
+            else:
+                namespaces = [year_ns]
 
         # (2) 부서 추출 (설계처, 구조물처 등 'OO처' 패턴)
         # ⚠️ "단부처리", "처리", "처분" 등 오탐 방지: 처 뒤에 한글이 오면 부서가 아님
@@ -1212,7 +1218,10 @@ def main():
             if filter_dept:
                 filters["dept"] = filter_dept
             if filter_year > 0:
-                filters["year"] = filter_year
+                import hashlib
+                year_ns = hashlib.md5(f"설계실무지침/{filter_year}".encode()).hexdigest()
+                selected_namespaces = [year_ns]
+                print(f"🕵️‍♂️ [Sidebar-Filter] 연도: {filter_year} → namespace 필터")
             
             reranker_label = "Reranker" if getattr(rag, 'cohere_client', None) else "키워드 부스팅"
             with st.spinner("🔍 문서 검색 중..."):
